@@ -1,0 +1,4 @@
+SameBoy/
+out/
+*.so
+__pycache__/
