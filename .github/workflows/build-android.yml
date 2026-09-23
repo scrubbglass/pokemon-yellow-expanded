@@ -1,0 +1,72 @@
+name: Build Android ARM64 prototype
+
+on:
+  push:
+    branches:
+      - prototype-v1
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned SameBoy source
+        run: |
+          git clone https://github.com/LIJI32/SameBoy.git SameBoy
+          cd SameBoy
+          git checkout 213a12ce93d66b105a113debd9396306066a7cfc
+
+      - name: Apply Pokemon Yellow expanded-view patch
+        run: python3 tools/patch_sameboy.py SameBoy
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "ndk;27.2.12479018"
+
+      - name: Build RGBDS toolchain
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex libpng-dev pkg-config
+          git clone --depth 1 https://github.com/gbdev/rgbds.git rgbds
+          make -C rgbds -j2
+          sudo make -C rgbds install
+
+      - name: Build SameBoy boot ROMs
+        run: make -C SameBoy bootroms CONF=release
+
+      - name: Cross-compile Android ARM64 libretro core
+        shell: bash
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC="$TOOLCHAIN/aarch64-linux-android21-clang"
+          export AR="$TOOLCHAIN/llvm-ar"
+          export CFLAGS="-DANDROID -O2"
+          make -C SameBoy/libretro \
+            platform=unix \
+            BOOTROMS_DIR="$GITHUB_WORKSPACE/SameBoy/build/bin/BootROMs"
+
+      - name: Verify Android ARM64 binary
+        run: |
+          file SameBoy/sameboy_libretro.so
+          readelf -h SameBoy/sameboy_libretro.so | grep -E "Class:|Machine:"
+
+      - name: Rename core
+        run: |
+          mkdir -p out
+          cp SameBoy/sameboy_libretro.so out/Pokemon_Yellow_Expanded_v0_1_RunningView_libretro_android.so
+
+      - name: Upload Android core
+        uses: actions/upload-artifact@v4
+        with:
+          name: pokemon-yellow-expanded-android-arm64
+          path: out/Pokemon_Yellow_Expanded_v0_1_RunningView_libretro_android.so
