@@ -1,4 +1,4 @@
-# v0.3.1 Boot Guard test notes
+# v0.3.2 Stable Map test notes
 
 The overworld output is 320x288, exactly twice the Game Boy's native width and
 height. The expanded area is reconstructed from Pokemon Yellow's full map-block
@@ -11,6 +11,12 @@ v0.3.1 adds an explicit boot-completion guard. Version 0.3 could occasionally
 mistake randomized CGB startup memory for valid overworld state on Android,
 activate the expensive full-map renderer during the SameBoy logo, and appear to
 hang with a fragmented logo.
+
+v0.3.2 keeps indoor maps at the native centered view, rejects map-buffer reads
+outside the current map plus its six-block connection border, and constrains
+the background alignment search around the game's real camera pointer. This is
+intended to remove the repeated houses, white columns, and progressive scenery
+drift seen while walking around Pallet Town in v0.3.1.
 
 Test these first:
 
