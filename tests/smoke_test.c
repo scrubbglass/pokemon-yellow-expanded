@@ -103,14 +103,14 @@ int main(int argc, char **argv)
 
     struct retro_system_av_info av;
     retro_get_system_av_info(&av);
-    if (av.geometry.base_width != 256 || av.geometry.base_height != 224) {
+    if (av.geometry.base_width != 320 || av.geometry.base_height != 288) {
         fprintf(stderr, "unexpected geometry: %ux%u\n",
                 av.geometry.base_width, av.geometry.base_height);
         return 6;
     }
 
     for (unsigned frame = 0; frame < 180; frame++) retro_run();
-    if (video_frames == 0 || last_width != 256 || last_height != 224) {
+    if (video_frames == 0 || last_width != 320 || last_height != 288) {
         fprintf(stderr, "unexpected video: frames=%u size=%ux%u\n",
                 video_frames, last_width, last_height);
         return 7;
