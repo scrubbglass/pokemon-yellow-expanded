@@ -63,10 +63,10 @@ jobs:
       - name: Rename core
         run: |
           mkdir -p out
-          cp SameBoy/sameboy_libretro.so out/Pokemon_Yellow_Expanded_v0_3_3_NaturalWorld_libretro_android.so
+          cp SameBoy/sameboy_libretro.so out/Pokemon_Yellow_Expanded_v0_3_4_FullColor_libretro_android.so
 
       - name: Upload Android core
         uses: actions/upload-artifact@v4
         with:
-          name: pokemon-yellow-expanded-v0-3-3-android-arm64
-          path: out/Pokemon_Yellow_Expanded_v0_3_3_NaturalWorld_libretro_android.so
+          name: pokemon-yellow-expanded-v0-3-4-android-arm64
+          path: out/Pokemon_Yellow_Expanded_v0_3_4_FullColor_libretro_android.so
