@@ -40,6 +40,8 @@ replace_once(
 #define YELLOW_W_Y_BLOCK_COORD 0xD362
 #define YELLOW_W_X_BLOCK_COORD 0xD363
 #define YELLOW_W_CUR_MAP 0xD35D
+#define YELLOW_W_CUR_MAP_TILESET 0xD366
+#define YELLOW_W_CUR_MAP_HEIGHT 0xD367
 #define YELLOW_W_CUR_MAP_WIDTH 0xD368
 #define YELLOW_W_MAP_VIEW_VRAM_POINTER 0xD525
 #define YELLOW_W_TILESET_BANK 0xD52A
@@ -85,7 +87,7 @@ static uint32_t retained_frame_1[256 * 224];
 
 replace_once(
     '    info->library_name     = "SameBoy";\n',
-    '    info->library_name     = "Pokemon Yellow Expanded v0.3.1 Boot Guard";\n',
+    '    info->library_name     = "Pokemon Yellow Expanded v0.3.2 Stable Map";\n',
     'core name',
 )
 
@@ -218,11 +220,22 @@ static bool pokemon_yellow_should_expand(void)
     const uint16_t blocks_ptr =
         GB_safe_read_memory(gb, YELLOW_W_TILESET_BLOCKS_PTR) |
         (GB_safe_read_memory(gb, YELLOW_W_TILESET_BLOCKS_PTR + 1) << 8);
+    const uint8_t map_tileset =
+        GB_safe_read_memory(gb, YELLOW_W_CUR_MAP_TILESET);
+    const uint8_t map_height =
+        GB_safe_read_memory(gb, YELLOW_W_CUR_MAP_HEIGHT);
     const uint8_t map_width =
         GB_safe_read_memory(gb, YELLOW_W_CUR_MAP_WIDTH);
+    const bool outdoor_tileset =
+        map_tileset == 0 ||  /* OVERWORLD */
+        map_tileset == 3 ||  /* FOREST */
+        map_tileset == 14 || /* SHIP_PORT */
+        map_tileset == 23;   /* PLATEAU */
     return block_view >= YELLOW_W_OVERWORLD_MAP &&
            block_view < YELLOW_W_OVERWORLD_MAP_END &&
            blocks_ptr >= 0x4000 && blocks_ptr < 0x8000 &&
+           outdoor_tileset &&
+           map_height > 0 && map_height < 0x40 &&
            map_width > 0 && map_width < 0x40;
 }
 
@@ -261,15 +274,19 @@ static bool pokemon_yellow_map_pixel(int map_x, int map_y,
     const int pixel_y = pokemon_yellow_mod32(map_y);
     const unsigned stride =
         GB_safe_read_memory(gb, YELLOW_W_CUR_MAP_WIDTH) + 6;
+    const unsigned rows =
+        GB_safe_read_memory(gb, YELLOW_W_CUR_MAP_HEIGHT) + 6;
 
-    uint8_t block = 0;
-    if (block_x >= 0 && block_x < (int)stride && block_y >= 0) {
-        const unsigned block_offset = block_y * stride + block_x;
-        if (block_offset < YELLOW_W_OVERWORLD_MAP_END - YELLOW_W_OVERWORLD_MAP) {
-            block = GB_safe_read_memory(
-                gb, YELLOW_W_OVERWORLD_MAP + block_offset);
-        }
+    if (block_x < 0 || block_x >= (int)stride ||
+        block_y < 0 || block_y >= (int)rows) {
+        return false;
     }
+    const unsigned block_offset = block_y * stride + block_x;
+    if (block_offset >= YELLOW_W_OVERWORLD_MAP_END - YELLOW_W_OVERWORLD_MAP) {
+        return false;
+    }
+    const uint8_t block = GB_safe_read_memory(
+        gb, YELLOW_W_OVERWORLD_MAP + block_offset);
 
     const uint8_t tile_in_block =
         (pixel_y >> 3) * 4 + (pixel_x >> 3);
@@ -332,10 +349,17 @@ static void pokemon_yellow_find_native_alignment(int *native_x, int *native_y)
     int best_y = approximate_y;
     const bool reuse_alignment =
         pokemon_yellow_alignment_valid && pokemon_yellow_alignment_map == map;
-    const int reference_x = reuse_alignment
+    int reference_x = reuse_alignment
         ? pokemon_yellow_native_map_x : approximate_x;
-    const int reference_y = reuse_alignment
+    int reference_y = reuse_alignment
         ? pokemon_yellow_native_map_y : approximate_y;
+    /* Never allow the image matcher to wander away from the game's real map
+     * pointer. Repetitive ground tiles can otherwise produce an equally good
+     * match one block away, then let the alignment drift farther every frame. */
+    if (reference_x < approximate_x - 24) reference_x = approximate_x - 24;
+    if (reference_x > approximate_x + 24) reference_x = approximate_x + 24;
+    if (reference_y < approximate_y - 24) reference_y = approximate_y - 24;
+    if (reference_y > approximate_y + 24) reference_y = approximate_y + 24;
     const int search_radius = reuse_alignment ? 6 : 24;
 
     /* Match the reconstructed map against sparse pixels in the real LCD frame.
@@ -349,6 +373,12 @@ static void pokemon_yellow_find_native_alignment(int *native_x, int *native_y)
              adjust_x++) {
             const int candidate_x = reference_x + adjust_x;
             const int candidate_y = reference_y + adjust_y;
+            if (candidate_x < approximate_x - 24 ||
+                candidate_x > approximate_x + 24 ||
+                candidate_y < approximate_y - 24 ||
+                candidate_y > approximate_y + 24) {
+                continue;
+            }
             unsigned score = 0;
             unsigned samples = 0;
 
