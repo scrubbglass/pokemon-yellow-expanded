@@ -102,6 +102,21 @@ static bool write_ppm(const char *path)
     return fclose(output) == 0;
 }
 
+static bool expanded_border_has_map_pixels(void)
+{
+    unsigned non_black = 0;
+    for (unsigned y = 0; y < HEIGHT; y++) {
+        for (unsigned x = 0; x < WIDTH; x++) {
+            const bool outside_native = x < 80 || x >= 240 ||
+                                        y < 72 || y >= 216;
+            if (outside_native && (frame[y * WIDTH + x] & 0xFFFFFF)) {
+                non_black++;
+            }
+        }
+    }
+    return non_black > 1000;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3) {
@@ -159,6 +174,16 @@ int main(int argc, char **argv)
         return 6;
     }
     if (!write_ppm(argv[2])) return 7;
+
+    /* Menus and dialogue load Yellow's font. The expanded outdoor world must
+     * remain rendered behind them instead of collapsing to the 160x144 LCD. */
+    tap(RETRO_DEVICE_ID_JOYPAD_START);
+    run_frames(30, 0);
+    if (!expanded_border_has_map_pixels()) {
+        fprintf(stderr, "expanded border vanished while font/menu was active\n");
+        return 8;
+    }
+    tap(RETRO_DEVICE_ID_JOYPAD_B);
 
     retro_unload_game();
     retro_deinit();
