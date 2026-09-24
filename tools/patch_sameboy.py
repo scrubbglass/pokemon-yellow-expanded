@@ -85,7 +85,7 @@ static uint32_t retained_frame_1[256 * 224];
 
 replace_once(
     '    info->library_name     = "SameBoy";\n',
-    '    info->library_name     = "Pokemon Yellow Expanded v0.3 Living World";\n',
+    '    info->library_name     = "Pokemon Yellow Expanded v0.3.1 Boot Guard";\n',
     'core name',
 )
 
@@ -189,6 +189,13 @@ static bool pokemon_yellow_should_expand(void)
     }
 
     GB_gameboy_t *gb = &gameboy[0];
+    /* WRAM is intentionally randomized while the CGB boot ROM is running.
+     * On some devices those random bytes can accidentally resemble valid map
+     * pointers. Never enter the expanded renderer until the boot ROM has
+     * handed control to Pokemon Yellow. */
+    if (!gb->boot_rom_finished) {
+        return false;
+    }
     if (!(gb->io_registers[GB_IO_LCDC] & GB_LCDC_ENABLE)) {
         return false;
     }
