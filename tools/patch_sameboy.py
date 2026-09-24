@@ -74,7 +74,9 @@ static uint32_t *frame_buf_copy = NULL;
 static bool pokemon_yellow_enhanced = false;
 static uint32_t pokemon_yellow_frame[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static uint8_t pokemon_yellow_bg_color[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
+static uint8_t pokemon_yellow_bg_tile[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static uint8_t pokemon_yellow_bg_priority[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
+static uint8_t pokemon_yellow_object_pixel[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static bool pokemon_yellow_alignment_valid = false;
 static uint8_t pokemon_yellow_alignment_map = 0;
 static int pokemon_yellow_native_map_x = 0;
@@ -87,7 +89,7 @@ static uint32_t retained_frame_1[256 * 224];
 
 replace_once(
     '    info->library_name     = "SameBoy";\n',
-    '    info->library_name     = "Pokemon Yellow Expanded v0.3.2 Stable Map";\n',
+    '    info->library_name     = "Pokemon Yellow Expanded v0.3.3 Natural World";\n',
     'core name',
 )
 
@@ -204,10 +206,6 @@ static bool pokemon_yellow_should_expand(void)
     if (GB_safe_read_memory(gb, YELLOW_W_IS_IN_BATTLE) != 0) {
         return false;
     }
-    if (GB_safe_read_memory(gb, YELLOW_W_FONT_LOADED) & 1) {
-        return false;
-    }
-
     const uint8_t map_pointer_high =
         GB_safe_read_memory(gb, YELLOW_W_MAP_VIEW_VRAM_POINTER + 1);
     if (map_pointer_high < 0x98 || map_pointer_high > 0x9B) {
@@ -265,7 +263,8 @@ static int pokemon_yellow_mod32(int value)
  * its connected-map border, so pixels outside the 160x144 LCD are not stale.
  */
 static bool pokemon_yellow_map_pixel(int map_x, int map_y,
-                                    uint32_t *rgb, uint8_t *raw_color)
+                                    uint32_t *rgb, uint8_t *raw_color,
+                                    uint8_t *tile_id)
 {
     GB_gameboy_t *gb = &gameboy[0];
     const int block_x = pokemon_yellow_floor_div32(map_x);
@@ -301,6 +300,7 @@ static bool pokemon_yellow_map_pixel(int map_x, int map_y,
         (size_t)bank * 0x4000 + (bank_address - 0x4000);
     if (!gb->rom || rom_offset >= gb->rom_size) return false;
     const uint8_t tile = gb->rom[rom_offset];
+    if (tile_id) *tile_id = tile;
 
     const uint8_t lcdc = gb->io_registers[GB_IO_LCDC];
     uint16_t tile_address;
@@ -388,7 +388,7 @@ static void pokemon_yellow_find_native_alignment(int *native_x, int *native_y)
                     uint32_t background;
                     if (!pokemon_yellow_map_pixel(candidate_x + (int)x,
                                                   candidate_y + (int)y,
-                                                  &background, NULL)) {
+                                                  &background, NULL, NULL)) {
                         continue;
                     }
                     samples++;
@@ -431,15 +431,18 @@ static void pokemon_yellow_render_background(void)
         for (unsigned out_x = 0; out_x < YELLOW_VIEW_WIDTH; out_x++) {
             const unsigned output_offset = out_y * YELLOW_VIEW_WIDTH + out_x;
             uint8_t color = 0;
+            uint8_t tile = 0;
             pokemon_yellow_bg_priority[output_offset] = 0;
             if (pokemon_yellow_map_pixel(output_map_x + (int)out_x,
                                          output_map_y + (int)out_y,
                                          &pokemon_yellow_frame[output_offset],
-                                         &color)) {
+                                         &color, &tile)) {
                 pokemon_yellow_bg_color[output_offset] = color;
+                pokemon_yellow_bg_tile[output_offset] = tile;
             }
             else {
                 pokemon_yellow_bg_color[output_offset] = 0;
+                pokemon_yellow_bg_tile[output_offset] = 0;
             }
         }
     }
@@ -497,6 +500,7 @@ static void pokemon_yellow_draw_state_tile(int base_x, int base_y,
             color = (gb->io_registers[GB_IO_OBP0] >> (color * 2)) & 3;
             pokemon_yellow_frame[output_offset] =
                 gb->object_palettes_rgb[color];
+            pokemon_yellow_object_pixel[output_offset] = 1;
         }
     }
 }
@@ -589,30 +593,61 @@ static uint8_t pokemon_yellow_clamp_color(int value)
     return value;
 }
 
-static uint32_t pokemon_yellow_vivid_color(uint32_t color)
+static uint8_t pokemon_yellow_mix_channel(int original, int target)
 {
-    const int red = (color >> 16) & 0xFF;
-    const int green = (color >> 8) & 0xFF;
-    const int blue = color & 0xFF;
-    const int luminance = (red * 54 + green * 183 + blue * 19) >> 8;
-    int vivid_red = luminance + (red - luminance) * 7 / 4;
-    int vivid_green = luminance + (green - luminance) * 7 / 4;
-    int vivid_blue = luminance + (blue - luminance) * 7 / 4;
-    vivid_red = (vivid_red - 128) * 9 / 8 + 128;
-    vivid_green = (vivid_green - 128) * 9 / 8 + 128;
-    vivid_blue = (vivid_blue - 128) * 9 / 8 + 128;
-    return (pokemon_yellow_clamp_color(vivid_red) << 16) |
-           (pokemon_yellow_clamp_color(vivid_green) << 8) |
-           pokemon_yellow_clamp_color(vivid_blue);
+    return pokemon_yellow_clamp_color((original * 2 + target * 3) / 5);
 }
 
-static void pokemon_yellow_apply_vivid_colors(void)
+static uint32_t pokemon_yellow_natural_color(uint32_t color,
+                                             uint8_t tile,
+                                             bool object_pixel)
+{
+    static const uint8_t earth[4][3] = {
+        {30, 34, 30}, {105, 73, 43}, {195, 151, 83}, {247, 239, 207},
+    };
+    static const uint8_t green[4][3] = {
+        {22, 49, 31}, {43, 105, 54}, {105, 184, 79}, {232, 242, 190},
+    };
+    static const uint8_t water[4][3] = {
+        {17, 45, 73}, {28, 96, 145}, {75, 174, 211}, {218, 242, 236},
+    };
+    static const uint8_t character[4][3] = {
+        {27, 31, 29}, {104, 65, 43}, {225, 169, 58}, {250, 235, 193},
+    };
+    const int red = (color >> 16) & 0xFF;
+    const int source_green = (color >> 8) & 0xFF;
+    const int blue = color & 0xFF;
+    const int luminance = (red * 54 + source_green * 183 + blue * 19) >> 8;
+    const unsigned shade = luminance < 64 ? 0 :
+                           luminance < 150 ? 1 :
+                           luminance < 225 ? 2 : 3;
+    const uint8_t (*palette)[3] = earth;
+
+    if (object_pixel) {
+        palette = character;
+    }
+    else if (tile == 0x14) { /* water in every tileset that contains it */
+        palette = water;
+    }
+    else if (tile == 0x3D || tile == 0x52) { /* trees and tall grass */
+        palette = green;
+    }
+
+    return (pokemon_yellow_mix_channel(red, palette[shade][0]) << 16) |
+           (pokemon_yellow_mix_channel(source_green, palette[shade][1]) << 8) |
+           pokemon_yellow_mix_channel(blue, palette[shade][2]);
+}
+
+static void pokemon_yellow_apply_natural_colors(void)
 {
     for (unsigned pixel = 0;
          pixel < YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT;
          pixel++) {
         pokemon_yellow_frame[pixel] =
-            pokemon_yellow_vivid_color(pokemon_yellow_frame[pixel]);
+            pokemon_yellow_natural_color(
+                pokemon_yellow_frame[pixel],
+                pokemon_yellow_bg_tile[pixel],
+                pokemon_yellow_object_pixel[pixel] != 0);
     }
 }
 
@@ -684,6 +719,7 @@ static void pokemon_yellow_render_sprites(void)
                     pokemon_yellow_frame[output_offset] =
                         gb->object_palettes_rgb[palette * 4 + color];
                 }
+                pokemon_yellow_object_pixel[output_offset] = 1;
             }
         }
     }
@@ -692,6 +728,8 @@ static void pokemon_yellow_render_sprites(void)
 static void pokemon_yellow_video_refresh(void)
 {
     memset(pokemon_yellow_frame, 0, sizeof(pokemon_yellow_frame));
+    memset(pokemon_yellow_object_pixel, 0,
+           sizeof(pokemon_yellow_object_pixel));
 
     const bool expanded = pokemon_yellow_should_expand();
     if (expanded) {
@@ -710,7 +748,7 @@ static void pokemon_yellow_video_refresh(void)
     }
 
     if (expanded) {
-        pokemon_yellow_apply_vivid_colors();
+        pokemon_yellow_apply_natural_colors();
     }
 
     video_cb(pokemon_yellow_frame,
