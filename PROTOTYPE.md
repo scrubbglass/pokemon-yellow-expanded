@@ -1,4 +1,4 @@
-# v0.3 Living World test notes
+# v0.3.1 Boot Guard test notes
 
 The overworld output is 320x288, exactly twice the Game Boy's native width and
 height. The expanded area is reconstructed from Pokemon Yellow's full map-block
@@ -6,6 +6,11 @@ buffer rather than the wrapping hardware tile map. Map objects are reconstructed
 from the game's live sprite state, while the original 160x144 hardware-rendered
 view remains authoritative in the center. Collision, scripts, battles, menus,
 dialogue, and saves are still controlled by the original game.
+
+v0.3.1 adds an explicit boot-completion guard. Version 0.3 could occasionally
+mistake randomized CGB startup memory for valid overworld state on Android,
+activate the expensive full-map renderer during the SameBoy logo, and appear to
+hang with a fragmented logo.
 
 Test these first:
 

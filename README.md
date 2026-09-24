@@ -3,7 +3,7 @@
 An experimental Android ARM64 SameBoy libretro core for the US Pokemon Yellow
 Game Boy Color ROM.
 
-Prototype v0.3 Living World:
+Prototype v0.3.1 Boot Guard:
 
 - Hold **B** while walking to run at bicycle speed.
 - Expands the overworld from 160x144 to 320x288, exactly twice the native
@@ -13,6 +13,9 @@ Prototype v0.3 Living World:
   the old screen boundary.
 - Applies a more saturated, higher-contrast color treatment to the expanded
   overworld.
+- Keeps the expanded renderer disabled until SameBoy's boot ROM has completely
+  handed control to Pokemon Yellow, preventing randomized startup memory from
+  being mistaken for a loaded map.
 - Keeps SameBoy's native 160x144 rendering pixel-perfect in the center.
 - Centers battles, menus, and dialogue at their original size.
 - Applies the running change in emulator memory; it never modifies the ROM file.
