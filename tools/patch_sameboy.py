@@ -27,8 +27,8 @@ replace_once(
 
 #define YELLOW_NATIVE_WIDTH 160
 #define YELLOW_NATIVE_HEIGHT 144
-#define YELLOW_VIEW_MARGIN_X 48
-#define YELLOW_VIEW_MARGIN_Y 40
+#define YELLOW_VIEW_MARGIN_X 80
+#define YELLOW_VIEW_MARGIN_Y 72
 #define YELLOW_VIEW_WIDTH (YELLOW_NATIVE_WIDTH + YELLOW_VIEW_MARGIN_X * 2)
 #define YELLOW_VIEW_HEIGHT (YELLOW_NATIVE_HEIGHT + YELLOW_VIEW_MARGIN_Y * 2)
 
@@ -41,10 +41,16 @@ replace_once(
 #define YELLOW_W_X_BLOCK_COORD 0xD363
 #define YELLOW_W_CUR_MAP 0xD35D
 #define YELLOW_W_CUR_MAP_WIDTH 0xD368
-#define YELLOW_W_MAP_BACKGROUND_TILE 0xD3AC
 #define YELLOW_W_MAP_VIEW_VRAM_POINTER 0xD525
 #define YELLOW_W_TILESET_BANK 0xD52A
 #define YELLOW_W_TILESET_BLOCKS_PTR 0xD52B
+#define YELLOW_W_SPRITE_STATE_DATA1 0xC100
+#define YELLOW_W_SPRITE_STATE_DATA2 0xC200
+#define YELLOW_W_Y_COORD 0xD360
+#define YELLOW_W_X_COORD 0xD361
+#define YELLOW_W_NUM_SPRITES 0xD4E0
+#define YELLOW_W_TOGGLEABLE_OBJECT_FLAGS 0xD5A5
+#define YELLOW_W_TOGGLEABLE_OBJECT_LIST 0xD5CD
 
 #define YELLOW_RUNNING_ENTRY_OFFSET 0x049D
 #define YELLOW_RUNNING_ENTRY_SIZE 5
@@ -71,12 +77,6 @@ static bool pokemon_yellow_alignment_valid = false;
 static uint8_t pokemon_yellow_alignment_map = 0;
 static int pokemon_yellow_native_map_x = 0;
 static int pokemon_yellow_native_map_y = 0;
-static unsigned pokemon_yellow_map_stride = 0;
-static uint8_t pokemon_yellow_background_block = 0;
-static uint8_t pokemon_yellow_tileset_bank = 0;
-static uint16_t pokemon_yellow_tileset_blocks_ptr = 0;
-static uint8_t pokemon_yellow_lcdc = 0;
-static uint8_t pokemon_yellow_bgp = 0;
 
 static uint32_t retained_frame_1[256 * 224];
 ''',
@@ -85,7 +85,7 @@ static uint32_t retained_frame_1[256 * 224];
 
 replace_once(
     '    info->library_name     = "SameBoy";\n',
-    '    info->library_name     = "Pokemon Yellow Expanded v0.2 Full Map View";\n',
+    '    info->library_name     = "Pokemon Yellow Expanded v0.3 Living World";\n',
     'core name',
 )
 
@@ -252,10 +252,12 @@ static bool pokemon_yellow_map_pixel(int map_x, int map_y,
     const int block_y = pokemon_yellow_floor_div32(map_y);
     const int pixel_x = pokemon_yellow_mod32(map_x);
     const int pixel_y = pokemon_yellow_mod32(map_y);
-    uint8_t block = pokemon_yellow_background_block;
-    if (block_x >= 0 && block_x < (int)pokemon_yellow_map_stride && block_y >= 0) {
-        const unsigned block_offset =
-            block_y * pokemon_yellow_map_stride + block_x;
+    const unsigned stride =
+        GB_safe_read_memory(gb, YELLOW_W_CUR_MAP_WIDTH) + 6;
+
+    uint8_t block = 0;
+    if (block_x >= 0 && block_x < (int)stride && block_y >= 0) {
+        const unsigned block_offset = block_y * stride + block_x;
         if (block_offset < YELLOW_W_OVERWORLD_MAP_END - YELLOW_W_OVERWORLD_MAP) {
             block = GB_safe_read_memory(
                 gb, YELLOW_W_OVERWORLD_MAP + block_offset);
@@ -264,19 +266,21 @@ static bool pokemon_yellow_map_pixel(int map_x, int map_y,
 
     const uint8_t tile_in_block =
         (pixel_y >> 3) * 4 + (pixel_x >> 3);
+    const uint8_t bank = GB_safe_read_memory(gb, YELLOW_W_TILESET_BANK);
+    const uint16_t blocks_ptr =
+        pokemon_yellow_read16(gb, YELLOW_W_TILESET_BLOCKS_PTR);
     const uint32_t bank_address =
-        (uint32_t)pokemon_yellow_tileset_blocks_ptr +
-        (uint32_t)block * 16 + tile_in_block;
+        (uint32_t)blocks_ptr + (uint32_t)block * 16 + tile_in_block;
     if (bank_address < 0x4000 || bank_address >= 0x8000) return false;
 
     const size_t rom_offset =
-        (size_t)pokemon_yellow_tileset_bank * 0x4000 +
-        (bank_address - 0x4000);
+        (size_t)bank * 0x4000 + (bank_address - 0x4000);
     if (!gb->rom || rom_offset >= gb->rom_size) return false;
     const uint8_t tile = gb->rom[rom_offset];
 
+    const uint8_t lcdc = gb->io_registers[GB_IO_LCDC];
     uint16_t tile_address;
-    if (pokemon_yellow_lcdc & GB_LCDC_TILE_SEL) {
+    if (lcdc & GB_LCDC_TILE_SEL) {
         tile_address = tile * 16;
     }
     else {
@@ -291,7 +295,7 @@ static bool pokemon_yellow_map_pixel(int map_x, int map_y,
     const uint8_t color =
         ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
     const uint8_t palette_color =
-        (pokemon_yellow_bgp >> (color * 2)) & 3;
+        (gb->io_registers[GB_IO_BGP] >> (color * 2)) & 3;
     if (raw_color) *raw_color = color;
     if (rgb) *rgb = gb->background_palettes_rgb[palette_color];
     return true;
@@ -325,28 +329,24 @@ static void pokemon_yellow_find_native_alignment(int *native_x, int *native_y)
         ? pokemon_yellow_native_map_x : approximate_x;
     const int reference_y = reuse_alignment
         ? pokemon_yellow_native_map_y : approximate_y;
+    const int search_radius = reuse_alignment ? 6 : 24;
 
     /* Match the reconstructed map against sparse pixels in the real LCD frame.
      * This handles the game's 2-pixel walking scroll without assuming that the
      * map buffer and LCD scroll register update on the same emulated frame. */
-    const bool close_to_previous = reuse_alignment &&
-        abs(approximate_x - pokemon_yellow_native_map_x) <= 32 &&
-        abs(approximate_y - pokemon_yellow_native_map_y) <= 32;
-    const int search_center_x = close_to_previous
-        ? pokemon_yellow_native_map_x : approximate_x;
-    const int search_center_y = close_to_previous
-        ? pokemon_yellow_native_map_y : approximate_y;
-    const int search_radius = close_to_previous ? 4 : 24;
-
-    for (int adjust_y = -search_radius; adjust_y <= search_radius; adjust_y++) {
-        for (int adjust_x = -search_radius; adjust_x <= search_radius; adjust_x++) {
-            const int candidate_x = search_center_x + adjust_x;
-            const int candidate_y = search_center_y + adjust_y;
+    for (int adjust_y = -search_radius;
+         adjust_y <= search_radius;
+         adjust_y++) {
+        for (int adjust_x = -search_radius;
+             adjust_x <= search_radius;
+             adjust_x++) {
+            const int candidate_x = reference_x + adjust_x;
+            const int candidate_y = reference_y + adjust_y;
             unsigned score = 0;
             unsigned samples = 0;
 
-            for (unsigned y = 4; y < YELLOW_NATIVE_HEIGHT; y += 8) {
-                for (unsigned x = 4; x < YELLOW_NATIVE_WIDTH; x += 8) {
+            for (unsigned y = 4; y < YELLOW_NATIVE_HEIGHT; y += 16) {
+                for (unsigned x = 4; x < YELLOW_NATIVE_WIDTH; x += 16) {
                     if (x >= 52 && x < 108 && y >= 44 && y < 104) continue;
                     uint32_t background;
                     if (!pokemon_yellow_map_pixel(candidate_x + (int)x,
@@ -384,18 +384,6 @@ static void pokemon_yellow_find_native_alignment(int *native_x, int *native_y)
 
 static void pokemon_yellow_render_background(void)
 {
-    GB_gameboy_t *gb = &gameboy[0];
-    pokemon_yellow_map_stride =
-        GB_safe_read_memory(gb, YELLOW_W_CUR_MAP_WIDTH) + 6;
-    pokemon_yellow_background_block =
-        GB_safe_read_memory(gb, YELLOW_W_MAP_BACKGROUND_TILE);
-    pokemon_yellow_tileset_bank =
-        GB_safe_read_memory(gb, YELLOW_W_TILESET_BANK);
-    pokemon_yellow_tileset_blocks_ptr =
-        pokemon_yellow_read16(gb, YELLOW_W_TILESET_BLOCKS_PTR);
-    pokemon_yellow_lcdc = gb->io_registers[GB_IO_LCDC];
-    pokemon_yellow_bgp = gb->io_registers[GB_IO_BGP];
-
     int native_x;
     int native_y;
     pokemon_yellow_find_native_alignment(&native_x, &native_y);
@@ -417,6 +405,177 @@ static void pokemon_yellow_render_background(void)
                 pokemon_yellow_bg_color[output_offset] = 0;
             }
         }
+    }
+}
+
+static bool pokemon_yellow_object_is_hidden(unsigned sprite_index)
+{
+    GB_gameboy_t *gb = &gameboy[0];
+    for (unsigned offset = 0; offset < 32; offset += 2) {
+        const uint8_t listed_sprite = GB_safe_read_memory(
+            gb, YELLOW_W_TOGGLEABLE_OBJECT_LIST + offset);
+        if (listed_sprite == 0xFF) return false;
+        const uint8_t flag_index = GB_safe_read_memory(
+            gb, YELLOW_W_TOGGLEABLE_OBJECT_LIST + offset + 1);
+        if (listed_sprite != sprite_index) continue;
+        return (GB_safe_read_memory(
+                    gb, YELLOW_W_TOGGLEABLE_OBJECT_FLAGS + (flag_index >> 3)) &
+                (1u << (flag_index & 7))) != 0;
+    }
+    return false;
+}
+
+static int pokemon_yellow_unwrap_coordinate(uint8_t raw, int expected)
+{
+    int value = raw;
+    while (value - expected > 128) value -= 256;
+    while (expected - value > 128) value += 256;
+    return value;
+}
+
+static void pokemon_yellow_draw_state_tile(int base_x, int base_y,
+                                           uint8_t tile, bool x_flip,
+                                           bool under_grass)
+{
+    GB_gameboy_t *gb = &gameboy[0];
+    const uint16_t tile_address = (uint16_t)tile * 16;
+    for (unsigned draw_y = 0; draw_y < 8; draw_y++) {
+        const int out_y = base_y + (int)draw_y;
+        if (out_y < 0 || out_y >= YELLOW_VIEW_HEIGHT) continue;
+        const uint8_t lo = gb->vram[tile_address + draw_y * 2];
+        const uint8_t hi = gb->vram[tile_address + draw_y * 2 + 1];
+        for (unsigned draw_x = 0; draw_x < 8; draw_x++) {
+            const int out_x = base_x + (int)draw_x;
+            if (out_x < 0 || out_x >= YELLOW_VIEW_WIDTH) continue;
+            const unsigned source_x = x_flip ? 7 - draw_x : draw_x;
+            const unsigned bit = 7 - source_x;
+            uint8_t color =
+                ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
+            if (color == 0) continue;
+            const unsigned output_offset =
+                out_y * YELLOW_VIEW_WIDTH + out_x;
+            if (under_grass && pokemon_yellow_bg_color[output_offset] != 0) {
+                continue;
+            }
+            color = (gb->io_registers[GB_IO_OBP0] >> (color * 2)) & 3;
+            pokemon_yellow_frame[output_offset] =
+                gb->object_palettes_rgb[color];
+        }
+    }
+}
+
+/*
+ * OAM only contains objects inside the original LCD-sized camera.  Yellow's
+ * sprite state tables retain every object on the current map, including its
+ * map coordinate, facing direction, animation frame and loaded VRAM slot.
+ * Reconstruct those 16x16 sprites so people remain visible in the expanded
+ * area instead of popping in at the old 160x144 boundary.
+ */
+static void pokemon_yellow_render_map_objects(void)
+{
+    GB_gameboy_t *gb = &gameboy[0];
+    unsigned count = GB_safe_read_memory(gb, YELLOW_W_NUM_SPRITES);
+    if (count > 14) count = 14;
+    const uint8_t player_y = GB_safe_read_memory(gb, YELLOW_W_Y_COORD);
+    const uint8_t player_x = GB_safe_read_memory(gb, YELLOW_W_X_COORD);
+
+    for (unsigned sprite_index = 1; sprite_index <= count; sprite_index++) {
+        const uint16_t state1 =
+            YELLOW_W_SPRITE_STATE_DATA1 + sprite_index * 16;
+        const uint16_t state2 =
+            YELLOW_W_SPRITE_STATE_DATA2 + sprite_index * 16;
+        const uint8_t picture_id = GB_safe_read_memory(gb, state1);
+        const uint8_t image_base = GB_safe_read_memory(gb, state2 + 0x0E);
+        if (!picture_id || !image_base ||
+            pokemon_yellow_object_is_hidden(sprite_index)) {
+            continue;
+        }
+
+        const uint8_t map_y = GB_safe_read_memory(gb, state2 + 4);
+        const uint8_t map_x = GB_safe_read_memory(gb, state2 + 5);
+        const int expected_y = (int8_t)(map_y - player_y) * 16 - 4;
+        const int expected_x = (int8_t)(map_x - player_x) * 16;
+        const int screen_y = pokemon_yellow_unwrap_coordinate(
+            GB_safe_read_memory(gb, state1 + 4), expected_y);
+        const int screen_x = pokemon_yellow_unwrap_coordinate(
+            GB_safe_read_memory(gb, state1 + 6), expected_x);
+        const int output_y = screen_y + YELLOW_VIEW_MARGIN_Y;
+        const int output_x = screen_x + YELLOW_VIEW_MARGIN_X;
+        if (output_x <= -16 || output_x >= YELLOW_VIEW_WIDTH ||
+            output_y <= -16 || output_y >= YELLOW_VIEW_HEIGHT) {
+            continue;
+        }
+
+        uint8_t image_index = GB_safe_read_memory(gb, state1 + 2);
+        if (image_index == 0xFF) {
+            const uint8_t facing = GB_safe_read_memory(gb, state1 + 9) & 0x0C;
+            const uint8_t animation = GB_safe_read_memory(gb, state1 + 8) & 3;
+            image_index = (uint8_t)(((image_base - 1) << 4) |
+                                    facing | animation);
+        }
+
+        const uint8_t image_slot = image_index >> 4;
+        const bool still_sprite = image_slot >= 0x0A;
+        const uint8_t base_tile = image_slot == 0x0B
+            ? 0x7C : (uint8_t)(image_slot * 12);
+        const uint8_t pose = still_sprite ? 0 : image_index & 0x0F;
+        const uint8_t direction = pose & 0x0C;
+        const uint8_t animation = pose & 3;
+        const bool walking = !still_sprite && (animation & 1);
+        const bool x_flip = direction == 0x0C ||
+            ((direction == 0 || direction == 4) && animation == 3);
+        const uint8_t facing_tile =
+            direction == 4 ? 4 : (direction == 8 || direction == 0x0C ? 8 : 0);
+        const bool grass_priority =
+            (GB_safe_read_memory(gb, state2 + 7) & 0x80) != 0;
+
+        for (unsigned tile_y = 0; tile_y < 2; tile_y++) {
+            for (unsigned tile_x = 0; tile_x < 2; tile_x++) {
+                const unsigned source_x = x_flip ? 1 - tile_x : tile_x;
+                const uint8_t tile = (uint8_t)(base_tile + facing_tile +
+                    tile_y * 2 + source_x + (walking ? 0x80 : 0));
+                pokemon_yellow_draw_state_tile(
+                    output_x + tile_x * 8,
+                    output_y + tile_y * 8,
+                    tile,
+                    x_flip,
+                    grass_priority && tile_y == 1);
+            }
+        }
+    }
+}
+
+static uint8_t pokemon_yellow_clamp_color(int value)
+{
+    if (value < 0) return 0;
+    if (value > 255) return 255;
+    return value;
+}
+
+static uint32_t pokemon_yellow_vivid_color(uint32_t color)
+{
+    const int red = (color >> 16) & 0xFF;
+    const int green = (color >> 8) & 0xFF;
+    const int blue = color & 0xFF;
+    const int luminance = (red * 54 + green * 183 + blue * 19) >> 8;
+    int vivid_red = luminance + (red - luminance) * 7 / 4;
+    int vivid_green = luminance + (green - luminance) * 7 / 4;
+    int vivid_blue = luminance + (blue - luminance) * 7 / 4;
+    vivid_red = (vivid_red - 128) * 9 / 8 + 128;
+    vivid_green = (vivid_green - 128) * 9 / 8 + 128;
+    vivid_blue = (vivid_blue - 128) * 9 / 8 + 128;
+    return (pokemon_yellow_clamp_color(vivid_red) << 16) |
+           (pokemon_yellow_clamp_color(vivid_green) << 8) |
+           pokemon_yellow_clamp_color(vivid_blue);
+}
+
+static void pokemon_yellow_apply_vivid_colors(void)
+{
+    for (unsigned pixel = 0;
+         pixel < YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT;
+         pixel++) {
+        pokemon_yellow_frame[pixel] =
+            pokemon_yellow_vivid_color(pokemon_yellow_frame[pixel]);
     }
 }
 
@@ -497,8 +656,10 @@ static void pokemon_yellow_video_refresh(void)
 {
     memset(pokemon_yellow_frame, 0, sizeof(pokemon_yellow_frame));
 
-    if (pokemon_yellow_should_expand()) {
+    const bool expanded = pokemon_yellow_should_expand();
+    if (expanded) {
         pokemon_yellow_render_background();
+        pokemon_yellow_render_map_objects();
         pokemon_yellow_render_sprites();
     }
 
@@ -509,6 +670,10 @@ static void pokemon_yellow_video_refresh(void)
                    YELLOW_VIEW_MARGIN_X,
                frame_buf + y * YELLOW_NATIVE_WIDTH,
                YELLOW_NATIVE_WIDTH * sizeof(uint32_t));
+    }
+
+    if (expanded) {
+        pokemon_yellow_apply_vivid_colors();
     }
 
     video_cb(pokemon_yellow_frame,
