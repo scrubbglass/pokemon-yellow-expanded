@@ -75,6 +75,7 @@ static bool pokemon_yellow_enhanced = false;
 static uint32_t pokemon_yellow_frame[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static uint8_t pokemon_yellow_bg_color[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static uint8_t pokemon_yellow_bg_tile[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
+static uint8_t pokemon_yellow_bg_block[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static uint8_t pokemon_yellow_bg_priority[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static uint8_t pokemon_yellow_object_pixel[YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT];
 static bool pokemon_yellow_alignment_valid = false;
@@ -89,7 +90,7 @@ static uint32_t retained_frame_1[256 * 224];
 
 replace_once(
     '    info->library_name     = "SameBoy";\n',
-    '    info->library_name     = "Pokemon Yellow Expanded v0.3.3 Natural World";\n',
+    '    info->library_name     = "Pokemon Yellow Expanded v0.3.4 Full Color";\n',
     'core name',
 )
 
@@ -264,7 +265,7 @@ static int pokemon_yellow_mod32(int value)
  */
 static bool pokemon_yellow_map_pixel(int map_x, int map_y,
                                     uint32_t *rgb, uint8_t *raw_color,
-                                    uint8_t *tile_id)
+                                    uint8_t *tile_id, uint8_t *block_id)
 {
     GB_gameboy_t *gb = &gameboy[0];
     const int block_x = pokemon_yellow_floor_div32(map_x);
@@ -286,6 +287,7 @@ static bool pokemon_yellow_map_pixel(int map_x, int map_y,
     }
     const uint8_t block = GB_safe_read_memory(
         gb, YELLOW_W_OVERWORLD_MAP + block_offset);
+    if (block_id) *block_id = block;
 
     const uint8_t tile_in_block =
         (pixel_y >> 3) * 4 + (pixel_x >> 3);
@@ -388,7 +390,7 @@ static void pokemon_yellow_find_native_alignment(int *native_x, int *native_y)
                     uint32_t background;
                     if (!pokemon_yellow_map_pixel(candidate_x + (int)x,
                                                   candidate_y + (int)y,
-                                                  &background, NULL, NULL)) {
+                                                  &background, NULL, NULL, NULL)) {
                         continue;
                     }
                     samples++;
@@ -432,17 +434,20 @@ static void pokemon_yellow_render_background(void)
             const unsigned output_offset = out_y * YELLOW_VIEW_WIDTH + out_x;
             uint8_t color = 0;
             uint8_t tile = 0;
+            uint8_t block = 0;
             pokemon_yellow_bg_priority[output_offset] = 0;
             if (pokemon_yellow_map_pixel(output_map_x + (int)out_x,
                                          output_map_y + (int)out_y,
                                          &pokemon_yellow_frame[output_offset],
-                                         &color, &tile)) {
+                                         &color, &tile, &block)) {
                 pokemon_yellow_bg_color[output_offset] = color;
                 pokemon_yellow_bg_tile[output_offset] = tile;
+                pokemon_yellow_bg_block[output_offset] = block;
             }
             else {
                 pokemon_yellow_bg_color[output_offset] = 0;
                 pokemon_yellow_bg_tile[output_offset] = 0;
+                pokemon_yellow_bg_block[output_offset] = 0;
             }
         }
     }
@@ -595,24 +600,115 @@ static uint8_t pokemon_yellow_clamp_color(int value)
 
 static uint8_t pokemon_yellow_mix_channel(int original, int target)
 {
-    return pokemon_yellow_clamp_color((original * 2 + target * 3) / 5);
+    return pokemon_yellow_clamp_color((original + target * 4) / 5);
 }
 
-static uint32_t pokemon_yellow_natural_color(uint32_t color,
-                                             uint8_t tile,
-                                             bool object_pixel)
+static bool pokemon_yellow_roof_tile(uint8_t tile)
 {
-    static const uint8_t earth[4][3] = {
-        {30, 34, 30}, {105, 73, 43}, {195, 151, 83}, {247, 239, 207},
+    switch (tile) {
+        case 0x02: case 0x05: case 0x06: case 0x07: case 0x08:
+        case 0x09: case 0x12: case 0x15: case 0x16: case 0x17:
+        case 0x18: case 0x19: case 0x25: case 0x26: case 0x28:
+        case 0x29: case 0x38: case 0x53:
+            return true;
+        default: return false;
+    }
+}
+
+static bool pokemon_yellow_window_tile(uint8_t tile)
+{
+    switch (tile) {
+        case 0x0A: case 0x0B: case 0x0C: case 0x0F: case 0x10:
+        case 0x1A: case 0x1B: case 0x1C: case 0x1F: case 0x22:
+        case 0x4B: case 0x4E: case 0x4F: case 0x5C: case 0x5D:
+            return true;
+        default: return false;
+    }
+}
+
+static bool pokemon_yellow_wall_tile(uint8_t tile)
+{
+    switch (tile) {
+        case 0x00: case 0x01: case 0x20: case 0x40: case 0x41:
+        case 0x42: case 0x43: case 0x44: case 0x45: case 0x48:
+        case 0x49: case 0x4A:
+            return true;
+        default: return false;
+    }
+}
+
+static bool pokemon_yellow_wood_tile(uint8_t tile)
+{
+    return tile == 0x0E || tile == 0x46 || tile == 0x47 ||
+           tile == 0x55 || tile == 0x56 || tile == 0x57;
+}
+
+static bool pokemon_yellow_stone_tile(uint8_t tile)
+{
+    return tile == 0x21 || tile == 0x2A || tile == 0x2B ||
+           tile == 0x3A || tile == 0x3B || tile == 0x54;
+}
+
+static bool pokemon_yellow_dirt_tile(uint8_t tile)
+{
+    return tile == 0x0D || tile == 0x24 || tile == 0x30 ||
+           tile == 0x31 || tile == 0x39;
+}
+
+static bool pokemon_yellow_grass_tile(uint8_t tile)
+{
+    return tile == 0x23 || (tile >= 0x2C && tile <= 0x2F) ||
+           (tile >= 0x34 && tile <= 0x37);
+}
+
+static uint32_t pokemon_yellow_vivid_color(uint32_t color)
+{
+    const int red = (color >> 16) & 0xFF;
+    const int source_green = (color >> 8) & 0xFF;
+    const int blue = color & 0xFF;
+    const int luminance = (red * 54 + source_green * 183 + blue * 19) >> 8;
+    const int vivid_red = luminance + (red - luminance) * 3 / 2;
+    const int vivid_green = luminance + (source_green - luminance) * 3 / 2;
+    const int vivid_blue = luminance + (blue - luminance) * 3 / 2;
+    return (pokemon_yellow_clamp_color(vivid_red) << 16) |
+           (pokemon_yellow_clamp_color(vivid_green) << 8) |
+           pokemon_yellow_clamp_color(vivid_blue);
+}
+
+static uint32_t pokemon_yellow_full_color(uint32_t color,
+                                          uint8_t tile,
+                                          uint8_t block,
+                                          bool object_pixel)
+{
+    static const uint8_t grass[4][3] = {
+        {18, 49, 28}, {41, 107, 52}, {103, 178, 73}, {214, 232, 159},
     };
-    static const uint8_t green[4][3] = {
-        {22, 49, 31}, {43, 105, 54}, {105, 184, 79}, {232, 242, 190},
+    static const uint8_t dirt[4][3] = {
+        {57, 38, 24}, {124, 77, 37}, {199, 141, 68}, {238, 211, 145},
     };
     static const uint8_t water[4][3] = {
-        {17, 45, 73}, {28, 96, 145}, {75, 174, 211}, {218, 242, 236},
+        {14, 42, 73}, {22, 91, 148}, {55, 164, 214}, {196, 235, 239},
+    };
+    static const uint8_t stone[4][3] = {
+        {34, 40, 45}, {78, 92, 100}, {148, 160, 162}, {225, 224, 214},
+    };
+    static const uint8_t roof[4][3] = {
+        {55, 25, 31}, {135, 44, 48}, {212, 76, 49}, {244, 180, 105},
+    };
+    static const uint8_t wall[4][3] = {
+        {44, 34, 28}, {115, 73, 43}, {207, 164, 94}, {247, 226, 176},
+    };
+    static const uint8_t window[4][3] = {
+        {20, 31, 51}, {38, 81, 128}, {102, 172, 203}, {238, 225, 184},
+    };
+    static const uint8_t wood[4][3] = {
+        {48, 30, 18}, {114, 68, 32}, {185, 118, 52}, {232, 192, 121},
+    };
+    static const uint8_t plant[4][3] = {
+        {12, 42, 23}, {29, 111, 47}, {72, 181, 68}, {190, 227, 118},
     };
     static const uint8_t character[4][3] = {
-        {27, 31, 29}, {104, 65, 43}, {225, 169, 58}, {250, 235, 193},
+        {24, 27, 38}, {43, 72, 128}, {228, 157, 48}, {250, 231, 193},
     };
     const int red = (color >> 16) & 0xFF;
     const int source_green = (color >> 8) & 0xFF;
@@ -621,16 +717,34 @@ static uint32_t pokemon_yellow_natural_color(uint32_t color,
     const unsigned shade = luminance < 64 ? 0 :
                            luminance < 150 ? 1 :
                            luminance < 225 ? 2 : 3;
-    const uint8_t (*palette)[3] = earth;
+    const uint8_t (*palette)[3] = NULL;
+
+    /* These IDs are specific to Yellow's OVERWORLD tileset. Other outdoor
+     * tilesets retain their own enhanced game palette until they get a tuned
+     * table of their own. */
+    if (GB_safe_read_memory(&gameboy[0], YELLOW_W_CUR_MAP_TILESET) != 0 &&
+        !object_pixel) {
+        return pokemon_yellow_vivid_color(color);
+    }
 
     if (object_pixel) {
         palette = character;
     }
-    else if (tile == 0x14) { /* water in every tileset that contains it */
+    else if ((block == 0x74 && (tile == 0x03 || tile == 0x2C)) ||
+             tile == 0x03 || tile == 0x14 || tile == 0x32 || tile == 0x33) {
         palette = water;
     }
-    else if (tile == 0x3D || tile == 0x52) { /* trees and tall grass */
-        palette = green;
+    else if (pokemon_yellow_roof_tile(tile)) palette = roof;
+    else if (pokemon_yellow_window_tile(tile)) palette = window;
+    else if (pokemon_yellow_wall_tile(tile)) palette = wall;
+    else if (pokemon_yellow_wood_tile(tile)) palette = wood;
+    else if (pokemon_yellow_stone_tile(tile)) palette = stone;
+    else if (tile == 0x52) palette = plant;
+    else if (pokemon_yellow_dirt_tile(tile)) palette = dirt;
+    else if (pokemon_yellow_grass_tile(tile)) palette = grass;
+
+    if (!palette) {
+        return pokemon_yellow_vivid_color(color);
     }
 
     return (pokemon_yellow_mix_channel(red, palette[shade][0]) << 16) |
@@ -638,15 +752,16 @@ static uint32_t pokemon_yellow_natural_color(uint32_t color,
            pokemon_yellow_mix_channel(blue, palette[shade][2]);
 }
 
-static void pokemon_yellow_apply_natural_colors(void)
+static void pokemon_yellow_apply_full_colors(void)
 {
     for (unsigned pixel = 0;
          pixel < YELLOW_VIEW_WIDTH * YELLOW_VIEW_HEIGHT;
          pixel++) {
         pokemon_yellow_frame[pixel] =
-            pokemon_yellow_natural_color(
+            pokemon_yellow_full_color(
                 pokemon_yellow_frame[pixel],
                 pokemon_yellow_bg_tile[pixel],
+                pokemon_yellow_bg_block[pixel],
                 pokemon_yellow_object_pixel[pixel] != 0);
     }
 }
@@ -748,7 +863,7 @@ static void pokemon_yellow_video_refresh(void)
     }
 
     if (expanded) {
-        pokemon_yellow_apply_natural_colors();
+        pokemon_yellow_apply_full_colors();
     }
 
     video_cb(pokemon_yellow_frame,
