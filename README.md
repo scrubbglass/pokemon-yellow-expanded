@@ -3,7 +3,7 @@
 An experimental Android ARM64 SameBoy libretro core for the US Pokemon Yellow
 Game Boy Color ROM.
 
-Prototype v0.3.3 Natural World:
+Prototype v0.3.4 Full Color:
 
 - Hold **B** while walking to run at bicycle speed.
 - Expands the overworld from 160x144 to 320x288, exactly twice the native
@@ -13,8 +13,9 @@ Prototype v0.3.3 Natural World:
   the old screen boundary.
 - Keeps the expanded outdoor view active behind dialogue and menus instead of
   briefly collapsing the output to the original Game Boy-sized frame.
-- Applies tile-aware natural colors: green grass and trees, blue water, warm
-  earth and buildings, and a separate high-contrast character palette.
+- Applies separate full-color palettes to grass, plants, paths, water, stone,
+  roofs, walls, windows, wood, and characters instead of tinting the entire
+  overworld with one color family.
 - Keeps the expanded renderer disabled until SameBoy's boot ROM has completely
   handed control to Pokemon Yellow, preventing randomized startup memory from
   being mistaken for a loaded map.

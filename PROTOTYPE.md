@@ -1,4 +1,4 @@
-# v0.3.3 Natural World test notes
+# v0.3.4 Full Color test notes
 
 The overworld output is 320x288, exactly twice the Game Boy's native width and
 height. The expanded area is reconstructed from Pokemon Yellow's full map-block
@@ -22,6 +22,13 @@ v0.3.3 keeps the expanded renderer active while outdoor dialogue or the Start
 menu is open, eliminating the full-screen shrink flash caused by v0.3.2's font
 guard. It also replaces the generic saturation pass with tile-aware natural
 color families for vegetation, water, earth/buildings, and characters.
+
+v0.3.4 replaces that first overly beige/green color treatment with a broader
+tile-aware palette. The Overworld tileset now distinguishes red roofs, cream
+walls, blue windows and water, green vegetation, tan paths, gray stone, brown
+wood, and separately colored characters. Other outdoor tilesets retain an
+enhanced version of Yellow's original palette until they receive dedicated
+tile tables.
 
 Test these first:
 
